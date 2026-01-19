@@ -1,0 +1,14 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h2>Upload Excel Inventory</h2>
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div style="padding: 20px; background: #f8f8f8; border: 1px solid #ccc;">
+        {{ form.as_p }}
+    </div>
+    <div style="margin-top: 20px;">
+        <input type="submit" value="Process Excel" class="default" style="background: #79aec8; color: white; padding: 10px 20px; border: none; cursor: pointer;">
+        <a href=".." style="margin-left: 10px;">Cancel</a>
+    </div>
+</form>
+{% endblock %}
