@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    container_name: nexusflow-web
+    command: gunicorn nexusflow_backend.wsgi:application --bind 0.0.0.0:9000 --workers 2 --timeout 60
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+    restart: always
+
+  db:
+    image: postgres:15
+    container_name: nexusflow-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: nexusflow_db
+      POSTGRES_USER: nexusflow_user
+      POSTGRES_PASSWORD: nexusflow_pass
+    ports:
+      - "5433:5432"
+    restart: always
+
+volumes:
+  postgres_data:
