@@ -2,3 +2,5 @@ Django>=4.2
 gunicorn
 djangorestframework
 psycopg2-binary
+pandas
+python-dotenv
