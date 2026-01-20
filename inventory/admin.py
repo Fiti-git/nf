@@ -105,11 +105,18 @@ class ExcelUploadLogAdmin(admin.ModelAdmin):
                     # --- Step 3: Prepare PendingProductApproval entries ---
                     pending_items = []
                     for _, row in df.iterrows():
+                        # Get itdesc from 3rd column (index 2) safely
+                        itdesc = ''
+                        try:
+                            itdesc = str(row.iloc[2]).strip()
+                        except Exception:
+                            itdesc = ''
+
                         pending_items.append(
                             PendingProductApproval(
                                 outlet=outlet,
                                 itcode=str(row.get('ITEM', '')).strip(),
-                                itdesc=str(row.get('ItDesc', '')).strip() if 'ItDesc' in df.columns else '',
+                                itdesc=itdesc,
                                 sprice=row.get('SELLING', 0) if 'SELLING' in df.columns else 0,
                                 cprice=row.get('COST', 0) if 'COST' in df.columns else 0,
                                 asat_date=selected_date,
