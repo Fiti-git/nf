@@ -2,7 +2,10 @@ Django>=4.2
 gunicorn
 djangorestframework
 psycopg2-binary
-pandas
+pandas>=1.5,<2.0
 python-dotenv
 django-jazzmin
 whitenoise
+openpyxl
+xlrd==1.2.0
+numpy>=1.24,<2.0

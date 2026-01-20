@@ -2,17 +2,18 @@ import pandas as pd
 from django.contrib import admin, messages
 from django.shortcuts import render, redirect
 from django.urls import path
-from django.utils.html import format_html
 
 from .models import ProductMaster, PendingProductApproval, ExcelUploadLog
 from .forms import ExcelUploadForm
 from core.models import Employee
+
 
 @admin.register(ProductMaster)
 class ProductMasterAdmin(admin.ModelAdmin):
     list_display = ('itcode', 'itdesc', 'outlet', 'sprice', 'cprice', 'barcode', 'asat_date')
     list_filter = ('outlet', 'asat_date')
     search_fields = ('itcode', 'itdesc', 'barcode')
+
 
 @admin.register(ExcelUploadLog)
 class ExcelUploadLogAdmin(admin.ModelAdmin):
@@ -30,8 +31,8 @@ class ExcelUploadLogAdmin(admin.ModelAdmin):
     def upload_excel(self, request):
         if request.method == "POST":
             form = ExcelUploadForm(request.POST, request.FILES)
-            
-            # Re-apply queryset restriction on POST to prevent security bypass
+
+            # Restrict outlet queryset for non-superusers
             if not request.user.is_superuser:
                 employee = getattr(request.user, 'employee_profile', None)
                 if employee:
@@ -42,7 +43,7 @@ class ExcelUploadLogAdmin(admin.ModelAdmin):
                 selected_date = form.cleaned_data['date']
                 excel_file = request.FILES['excel_file']
 
-                # 1. Save the Log Entry
+                # Save upload log entry
                 log = ExcelUploadLog.objects.create(
                     outlet=outlet,
                     selected_date=selected_date,
@@ -51,48 +52,95 @@ class ExcelUploadLogAdmin(admin.ModelAdmin):
                 )
 
                 try:
-                    # 2. Read Excel into Pandas
-                    df = pd.read_excel(excel_file)
-                    
-                    # 3. Just store everything into the Pending/Temp table first
-                    # We will do the comparison logic in the next step
+                    # --- Step 1: Load raw Excel without headers, detect header row ---
+                    df_raw = pd.read_excel(excel_file, header=None, engine='xlrd')
+
+                    header_row = None
+                    for i in range(15):
+                        row_text = df_raw.iloc[i].astype(str).str.lower().to_string()
+                        if 'item' in row_text:
+                            header_row = i
+                            break
+
+                    if header_row is None:
+                        raise ValueError("Could not detect header row containing 'item' keyword.")
+
+                    # Reload with proper header row
+                    excel_file.seek(0)  # Reset file pointer
+                    df = pd.read_excel(excel_file, header=header_row, engine='xlrd')
+
+                    # --- Step 2: Clean DataFrame ---
+                    df = df.dropna(how='all').dropna(axis=1, how='all')
+                    df.columns = df.columns.str.strip()
+
+                    # Rename duplicate columns
+                    cols = df.columns.tolist()
+                    for idx, col in enumerate(cols):
+                        if cols.count(col) > 1:
+                            first_idx = cols.index(col)
+                            if idx != first_idx:
+                                cols[idx] = f"{col}_{idx}"
+                    df.columns = cols
+
+                    # Drop 'Unnamed' columns
+                    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+
+                    # Filter rows where 'ITEM' is valid product code
+                    df = df[df['ITEM'].notna()]
+                    df = df[df['ITEM'].str.match(r'^[A-Za-z]+\d+', na=False)]
+                    df = df[~df['ITEM'].str.contains('copyright', case=False, na=False)]
+
+                    # Convert numeric columns to numbers, adjust based on your columns
+                    numeric_cols = ['TTL LTR', 'COST', 'SELLING', 'SIH', 'SELLING VALUE']
+                    existing_numeric_cols = [col for col in numeric_cols if col in df.columns]
+                    for col in existing_numeric_cols:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                    # Filter rows with valid numeric SIH and COST >= 0
+                    if 'SIH' in df.columns and 'COST' in df.columns:
+                        df = df[(df['SIH'] >= 0) & (df['COST'] >= 0)]
+
+                    df = df.reset_index(drop=True)
+
+                    # --- Step 3: Prepare PendingProductApproval entries ---
                     pending_items = []
                     for _, row in df.iterrows():
                         pending_items.append(
                             PendingProductApproval(
                                 outlet=outlet,
-                                itcode=str(row.get('Itcode', '')),
-                                itdesc=str(row.get('ItDesc', '')),
-                                sprice=row.get('sprice', 0),
-                                cprice=row.get('cprice', 0),
-                                asat_date=row.get('asatDate', selected_date),
-                                barcode=str(row.get('itembarcode', '')),
+                                itcode=str(row.get('ITEM', '')).strip(),
+                                itdesc=str(row.get('ItDesc', '')).strip() if 'ItDesc' in df.columns else '',
+                                sprice=row.get('SELLING', 0) if 'SELLING' in df.columns else 0,
+                                cprice=row.get('COST', 0) if 'COST' in df.columns else 0,
+                                asat_date=selected_date,
+                                barcode=str(row.get('barcode', '')).strip() if 'barcode' in df.columns else '',
                                 status='PENDING'
                             )
                         )
-                    
-                    # Bulk create for speed
+
+                    # Bulk create entries
                     PendingProductApproval.objects.bulk_create(pending_items)
-                    
+
                     messages.success(request, f"Successfully uploaded {len(pending_items)} items to the temporary table.")
                     return redirect("admin:inventory_pendingproductapproval_changelist")
 
                 except Exception as e:
                     messages.error(request, f"Error processing Excel: {str(e)}")
+
         else:
             form = ExcelUploadForm()
-            # Restrict the dropdown if the user is not a superuser
             if not request.user.is_superuser:
                 employee = getattr(request.user, 'employee_profile', None)
                 if employee:
                     form.fields['outlet'].queryset = employee.outlets.all()
-        
+
         context = {
             **self.admin_site.each_context(request),
             'form': form,
             'title': "Upload Inventory Excel"
         }
         return render(request, "admin/excel_upload_form.html", context)
+
 
 @admin.register(PendingProductApproval)
 class PendingApprovalAdmin(admin.ModelAdmin):
@@ -106,7 +154,6 @@ class PendingApprovalAdmin(admin.ModelAdmin):
     def approve_and_move_to_master(self, request, queryset):
         count = 0
         for item in queryset:
-            # Update or Create in ProductMaster
             ProductMaster.objects.update_or_create(
                 outlet=item.outlet,
                 itcode=item.itcode,
@@ -121,5 +168,5 @@ class PendingApprovalAdmin(admin.ModelAdmin):
             item.status = 'APPROVED'
             item.save()
             count += 1
-        
+
         self.message_user(request, f"Successfully moved {count} items to Product Master.")
