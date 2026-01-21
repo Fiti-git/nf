@@ -9,3 +9,4 @@ django-jazzmin
 whitenoise
 openpyxl
 xlrd>=2.0.1
+python_dotenv
